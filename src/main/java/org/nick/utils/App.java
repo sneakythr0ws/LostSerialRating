@@ -1,27 +1,37 @@
 package org.nick.utils;
 
+import com.ui4j.api.browser.BrowserEngine;
+import com.ui4j.api.browser.Page;
 import org.htmlcleaner.HtmlCleaner;
 import org.htmlcleaner.TagNode;
 import org.htmlcleaner.conditional.ITagNodeCondition;
 
+import java.io.File;
 import java.io.IOException;
-import java.io.InputStream;
-import java.net.URL;
+import java.io.PrintWriter;
+import java.math.BigDecimal;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Collectors;
+
+import static com.ui4j.api.browser.BrowserFactory.getWebKit;
 
 /**
  * Hello world!
  */
 public class App {
     private static final String HTTP_WWW_LOSTFILM_TV = "http://www.lostfilm.tv";
-    private static final String CH_WINDOWS_1251 = "windows-1251";
+
+    private static String getHtml(String url) {
+        BrowserEngine webKit = getWebKit();
+        try (Page page = webKit.navigate(url)) {
+            return (String) page.executeScript("document.documentElement.innerHTML");
+        }
+    }
 
     public static void main(String[] args) throws IOException {
-        InputStream in = new URL(HTTP_WWW_LOSTFILM_TV + "/serials.php").openStream();
-        TagNode node = new HtmlCleaner().clean(in, CH_WINDOWS_1251);
-        in.close();
+        TagNode node = new HtmlCleaner().clean(getHtml(HTTP_WWW_LOSTFILM_TV + "/serials.php"));
+
 
         List<? extends TagNode> nodes = node.getElementListByAttValue("class", "bb_a", true, true);
 
@@ -30,29 +40,37 @@ public class App {
         List<Serial> serials = nodes.stream().parallel().limit(8)
                 .map(e -> getSerial(e.getText().toString(), e.getAttributeByName("href")))
                 .peek(e -> System.out.println(count.incrementAndGet()))
-                .sorted((s1, s2) -> Double.compare(s1.rating, s2.rating)).collect(Collectors.toList());
+                .sorted((s1, s2) -> -Double.compare(s1.rating, s2.rating)).collect(Collectors.toList());
 
         serials.stream().forEach(System.out::println);
 
+        PrintWriter writer = new PrintWriter(new File("/LostFilmSerials.html"), "windows-1251");
+        writer.write("<html><body><table>");
+
+        for (Serial serial : serials) {
+            BigDecimal bigDecimal = new BigDecimal(serial.rating);
+
+            writer.write("<tr><td>" + bigDecimal.setScale(1, BigDecimal.ROUND_HALF_UP) + "</td><td><a href=\"" + HTTP_WWW_LOSTFILM_TV + serial.url + "\">" + serial.title + "</a></td></tr>");
+        }
+
+        writer.write("</table></body></html>");
+
+        writer.close();
+
         //System.out.println(getSerial("1", "/browse.php?cat=157"));
+        getWebKit().shutdown();
     }
 
     private static Serial getSerial(String title, String href) {
         final Serial reuslt = new Serial(title, href);
 
-        try {
-            InputStream in = new URL(HTTP_WWW_LOSTFILM_TV + reuslt.url).openStream();
-            HtmlCleaner cleaner = new HtmlCleaner();
-            TagNode node = cleaner.clean(in, CH_WINDOWS_1251);
-            in.close();
+        String html = getHtml(HTTP_WWW_LOSTFILM_TV + reuslt.url);
+        TagNode node = new HtmlCleaner().clean(html);
 
-            reuslt.rating = node.getElementList((ITagNodeCondition) App::isSeasonRow, true)
-                    .stream().flatMap(e -> e.getElementListByAttValue("align", "right", true, true).stream())
-                    .flatMap(e -> e.getElementListByName("label", true).stream())
-                    .mapToDouble(o -> Double.parseDouble(o.findElementByName("b", true).getText().toString())).average().orElse(0.0);
-        } catch (IOException e) {
-            reuslt.rating = 0.0;
-        }
+        reuslt.rating = node.getElementList((ITagNodeCondition) App::isSeasonRow, true)
+                .stream().flatMap(e -> e.getElementListByAttValue("align", "right", true, true).stream())
+                .flatMap(e -> e.getElementListByName("label", true).stream())
+                .mapToDouble(o -> Double.parseDouble(o.findElementByName("b", true).getText().toString())).average().orElse(0.0);
 
         return reuslt;
     }
