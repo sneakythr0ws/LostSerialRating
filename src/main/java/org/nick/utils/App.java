@@ -1,27 +1,30 @@
 package org.nick.utils;
 
+import org.apache.http.HttpHost;
+import org.apache.http.client.fluent.Request;
 import org.htmlcleaner.HtmlCleaner;
 import org.htmlcleaner.TagNode;
 import org.htmlcleaner.conditional.ITagNodeCondition;
 
 import java.io.File;
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.PrintWriter;
 import java.math.BigDecimal;
 import java.net.URL;
 import java.util.List;
 import java.util.Objects;
+import java.util.OptionalDouble;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Collectors;
 
-/**
- * Hello world!
- */
 public class App {
     private static final String HTTP_WWW_LOSTFILM_TV = "http://www.lostfilm.tv";
 
     public static void main(String[] args) throws IOException {
-        TagNode node = new HtmlCleaner().clean(new URL(HTTP_WWW_LOSTFILM_TV + "/serials.php"), "windows-1251");
+        InputStream in = new URL(HTTP_WWW_LOSTFILM_TV + "/serials.php").openStream();
+        TagNode node = new HtmlCleaner().clean(in, "windows-1251");
+        in.close();
 
         List<? extends TagNode> nodes = node.getElementListByAttValue("class", "bb_a", true, true);
 
@@ -46,20 +49,18 @@ public class App {
         writer.write("</table></body></html>");
 
         writer.close();
-
-        //System.out.println(getSerial("1", "/browse.php?cat=157"));
     }
 
     private static Serial getSerial(String title, String href) {
         final Serial reuslt = new Serial(title, href);
 
         try {
-            TagNode node = new HtmlCleaner().clean(new URL(HTTP_WWW_LOSTFILM_TV + reuslt.url), "windows-1251");
-            reuslt.rating = node.getElementList((ITagNodeCondition) App::isSeasonRow, true)
-                    .stream().flatMap(e -> e.getElementListByAttValue("align", "right", true, true).stream())
-                    .flatMap(e -> e.getElementListByName("label", true).stream())
-                    .mapToDouble(o -> Double.parseDouble(o.findElementByName("b", true).getText().toString())).average().orElse(0.0);
+            InputStream in = new URL(HTTP_WWW_LOSTFILM_TV + reuslt.url).openStream();
+            TagNode node = new HtmlCleaner().clean(in, "windows-1251");
+            in.close();
 
+            OptionalDouble rating = getRating(node);
+            reuslt.rating = rating.isPresent() ? rating.getAsDouble() : tryProxy(href);
         } catch (IOException e) {
             reuslt.rating = 0.0;
         }
@@ -67,9 +68,26 @@ public class App {
         return reuslt;
     }
 
+    private static OptionalDouble getRating(TagNode node) {
+        return node.getElementList((ITagNodeCondition) App::isSeasonRow, true)
+                .stream().flatMap(e -> e.getElementListByAttValue("align", "right", true, true).stream())
+                .flatMap(e -> e.getElementListByName("label", true).stream())
+                .mapToDouble(o -> Double.parseDouble(o.findElementByName("b", true).getText().toString())).average();
+    }
+
     private static boolean isSeasonRow(TagNode node) {
         boolean isRow = node.getName().equals("div") && node.hasAttribute("class") && node.getAttributeByName("class").toLowerCase().contains("t_row");
         return isRow && !node.getElementList((ITagNodeCondition) node1 -> node1.getName().equals("label") && node1.hasAttribute("title") && node1.getAttributeByName("title").equals("Сезон полностью"), true).isEmpty();
+    }
+
+    private static double tryProxy(String href) {
+        try {
+            final String content = Request.Get(HTTP_WWW_LOSTFILM_TV + href).viaProxy(new HttpHost("62.23.15.92", 3128)).execute().returnContent().asString();
+
+            return getRating(new HtmlCleaner().clean(content)).orElse(0.0);
+        } catch (IOException e) {
+            return 0.0;
+        }
     }
 
     private static class Serial {
